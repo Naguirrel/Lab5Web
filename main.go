@@ -162,41 +162,75 @@ if path == "/create" && method == "POST" {
 	totalEps := values.Get("total_episodes")
 
 	// Convertir a enteros
-currentInt, err1 := strconv.Atoi(currentEp)
-totalInt, err2 := strconv.Atoi(totalEps)
+  currentInt, err1 := strconv.Atoi(currentEp)
+  totalInt, err2 := strconv.Atoi(totalEps)
 
-if err1 != nil || err2 != nil {
-	log.Println("Error convirtiendo a int")
-	writeHTTP(conn, "400 Bad Request", "<h1>Datos inválidos</h1>")
-	return
-}
+  if err1 != nil || err2 != nil {
+    log.Println("Error convirtiendo a int")
+    writeHTTP(conn, "400 Bad Request", "<h1>Datos inválidos</h1>")
+    return
+  }
 
-// INSERT en la base
-_, err = db.Exec(
-	"INSERT INTO series (name, current_episode, total_episodes) VALUES (?, ?, ?)",
-	name, currentInt, totalInt,
-)
+  // INSERT en la base
+  _, err = db.Exec(
+    "INSERT INTO series (name, current_episode, total_episodes) VALUES (?, ?, ?)",
+    name, currentInt, totalInt,
+  )
 
-if err != nil {
-	log.Println("Error insertando en DB:", err)
-	writeHTTP(conn, "500 Internal Server Error", "<h1>Error guardando en base</h1>")
-	return
-}
+  if err != nil {
+    log.Println("Error insertando en DB:", err)
+    writeHTTP(conn, "500 Internal Server Error", "<h1>Error guardando en base</h1>")
+    return
+  }
 
-// Redirección 303 (POST/Redirect/GET)
-resp := "HTTP/1.1 303 See Other\r\n" +
-	"Location: /\r\n" +
-	"Content-Length: 0\r\n" +
-	"Connection: close\r\n" +
-	"\r\n"
+  // Redirección 303 (POST/Redirect/GET)
+  resp := "HTTP/1.1 303 See Other\r\n" +
+    "Location: /\r\n" +
+    "Content-Length: 0\r\n" +
+    "Connection: close\r\n" +
+    "\r\n"
 
-conn.Write([]byte(resp))
-return
+  conn.Write([]byte(resp))
+  return
 
-	writeHTTP(conn, "200 OK", resp)
-	return
-}
+    writeHTTP(conn, "200 OK", resp)
+    return
+  }
 
+  // POST /update?id=3
+  if strings.HasPrefix(path, "/update") && method == "POST" {
+
+    parts := strings.SplitN(path, "?", 2)
+    route := parts[0]
+
+    if route == "/update" && len(parts) > 1 {
+
+      params, _ := url.ParseQuery(parts[1])
+      id := params.Get("id")
+
+      _, err := db.Exec(
+        `UPDATE series
+        SET current_episode = current_episode + 1
+        WHERE id = ? AND current_episode < total_episodes`,
+        id,
+      )
+
+      if err != nil {
+        writeHTTP(conn, "500 Internal Server Error", "error")
+        return
+      }
+
+      resp := "HTTP/1.1 200 OK\r\n" +
+        "Content-Type: text/plain\r\n" +
+        "Content-Length: 2\r\n" +
+        "Connection: close\r\n" +
+        "\r\n" +
+        "ok"
+
+      conn.Write([]byte(resp))
+      return
+    }
+  }
 	// Solo atendemos "/" con la tabla. Cualquier otro path, mostramos un mensaje simple.
 	if path == "/" {
 		htmlBody, status := renderSeriesPage(db)
@@ -254,16 +288,18 @@ func renderSeriesPage(db *sql.DB) (string, string) {
 	for _, s := range series {
 		name := html.EscapeString(s.Name)
 		tableRows.WriteString(fmt.Sprintf(
-			`<tr class="row" data-name="%s" data-current="%d" data-total="%d">
-				<td>%d</td>
-				<td class="name">%s</td>
-				<td>%d</td>
-				<td>%d</td>
-				<td class="progressCell"></td>
-			</tr>`,
-			strings.ToLower(name), s.Current, s.TotalEpisodes,
-			s.ID, name, s.Current, s.TotalEpisodes,
-		))
+      `<tr class="row" data-name="%s" data-current="%d" data-total="%d">
+        <td>%d</td>
+        <td class="name">%s</td>
+        <td>%d</td>
+        <td>%d</td>
+        <td class="progressCell"></td>
+        <td><button onclick="nextEpisode(%d)">+1</button></td>
+      </tr>`,
+      strings.ToLower(name), s.Current, s.TotalEpisodes,
+      s.ID, name, s.Current, s.TotalEpisodes,
+      s.ID,
+      ))
 	}
 
 	body := fmt.Sprintf(`<!doctype html>
@@ -313,6 +349,7 @@ func renderSeriesPage(db *sql.DB) (string, string) {
         <th data-col="2">Current <span class="arrow" id="a2"></span></th>
         <th data-col="3">Total <span class="arrow" id="a3"></span></th>
         <th data-col="4">Progress <span class="arrow" id="a4"></span></th>
+        <th>Acción</th>
       </tr>
     </thead>
     <tbody>
@@ -437,6 +474,16 @@ func renderSeriesPage(db *sql.DB) (string, string) {
 
   setArrows();
 })();
+
+async function nextEpisode(id) {
+    const url = "/update?id=" + id;
+
+    const response = await fetch(url, { method: "POST" });
+
+    if (response.ok) {
+        location.reload();
+    }
+}
 </script>
 
 </body>
