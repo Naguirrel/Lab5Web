@@ -13,6 +13,7 @@ import (
   "strconv"
 	"net/url"
 	"io"
+  "os"
 )
 
 type Serie struct {
@@ -72,6 +73,25 @@ func handleConn(conn net.Conn, db *sql.DB) {
     path = parts[1]
   }
 
+  if path == "/favicon.ico" && method == "GET" {
+	data, err := os.ReadFile("favicon.ico")
+	if err != nil {
+		return
+	}
+
+	resp := fmt.Sprintf(
+		"HTTP/1.1 200 OK\r\n"+
+			"Content-Type: image/x-icon\r\n"+
+			"Content-Length: %d\r\n"+
+			"Connection: close\r\n\r\n",
+		len(data),
+	)
+
+	conn.Write([]byte(resp))
+	conn.Write(data)
+	return
+}
+
   // GET /create -> mostrar formulario
   if path == "/create" && method == "GET" {
     body := `<!doctype html>
@@ -115,6 +135,36 @@ func handleConn(conn net.Conn, db *sql.DB) {
     writeHTTP(conn, "200 OK", body)
     return
   }
+
+  if strings.HasPrefix(path, "/decrement") && method == "POST" {
+
+	parts := strings.SplitN(path, "?", 2)
+
+	if len(parts) > 1 {
+		params, _ := url.ParseQuery(parts[1])
+		id := params.Get("id")
+
+		_, err := db.Exec(
+			`UPDATE series
+			 SET current_episode = current_episode - 1
+			 WHERE id = ? AND current_episode > 1`,
+			id,
+		)
+
+		if err != nil {
+			writeHTTP(conn, "500 Internal Server Error", "error")
+			return
+		}
+
+		resp := "HTTP/1.1 200 OK\r\n" +
+			"Content-Type: text/plain\r\n" +
+			"Content-Length: 2\r\n" +
+			"Connection: close\r\n\r\nok"
+
+		conn.Write([]byte(resp))
+		return
+	}
+}
 
   // POST /create -> recibir formulario
 if path == "/create" && method == "POST" {
@@ -287,18 +337,26 @@ func renderSeriesPage(db *sql.DB) (string, string) {
 	var tableRows strings.Builder
 	for _, s := range series {
 		name := html.EscapeString(s.Name)
+    statusText := ""
+    if s.Current >= s.TotalEpisodes {
+      statusText = `<span style="color:green;font-weight:bold;">✔ COMPLETA</span>`
+    }
 		tableRows.WriteString(fmt.Sprintf(
       `<tr class="row" data-name="%s" data-current="%d" data-total="%d">
         <td>%d</td>
-        <td class="name">%s</td>
+        <td class="name">%s %s</td>
         <td>%d</td>
         <td>%d</td>
         <td class="progressCell"></td>
-        <td><button onclick="nextEpisode(%d)">+1</button></td>
+        <td>
+          <button onclick="nextEpisode(%d)">+1</button>
+          <button onclick="prevEpisode(%d)">-1</button>
+        </td>
+        
       </tr>`,
       strings.ToLower(name), s.Current, s.TotalEpisodes,
-      s.ID, name, s.Current, s.TotalEpisodes,
-      s.ID,
+      s.ID, name, statusText, s.Current, s.TotalEpisodes,
+      s.ID, s.ID,
       ))
 	}
 
@@ -307,6 +365,7 @@ func renderSeriesPage(db *sql.DB) (string, string) {
 <head>
   <meta charset="utf-8">
   <title>Tracker</title>
+  <link rel="icon" href="/favicon.ico">
   <style>
     body { font-family: Arial, sans-serif; margin: 40px; }
     h1 { margin: 0 0 8px 0; }
@@ -477,6 +536,16 @@ func renderSeriesPage(db *sql.DB) (string, string) {
 
 async function nextEpisode(id) {
     const url = "/update?id=" + id;
+
+    const response = await fetch(url, { method: "POST" });
+
+    if (response.ok) {
+        location.reload();
+    }
+}
+
+async function prevEpisode(id) {
+    const url = "/decrement?id=" + id;
 
     const response = await fetch(url, { method: "POST" });
 
