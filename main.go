@@ -9,11 +9,12 @@ import (
 	"net"
 	"strings"
 
-	_ "modernc.org/sqlite"
-  "strconv"
-	"net/url"
 	"io"
-  "os"
+	"net/url"
+	"os"
+	"strconv"
+
+	_ "modernc.org/sqlite"
 )
 
 type Serie struct {
@@ -21,6 +22,7 @@ type Serie struct {
 	Name          string
 	Current       int
 	TotalEpisodes int
+	Rating        int
 }
 
 func main() {
@@ -65,36 +67,36 @@ func handleConn(conn net.Conn, db *sql.DB) {
 	line = strings.TrimRight(line, "\r\n")
 	parts := strings.Fields(line)
 
-  method := ""
-  path := "/"
+	method := ""
+	path := "/"
 
-  if len(parts) >= 2 {
-    method = parts[0]
-    path = parts[1]
-  }
+	if len(parts) >= 2 {
+		method = parts[0]
+		path = parts[1]
+	}
 
-  if path == "/favicon.ico" && method == "GET" {
-	data, err := os.ReadFile("favicon.ico")
-	if err != nil {
+	if path == "/favicon.ico" && method == "GET" {
+		data, err := os.ReadFile("favicon.ico")
+		if err != nil {
+			return
+		}
+
+		resp := fmt.Sprintf(
+			"HTTP/1.1 200 OK\r\n"+
+				"Content-Type: image/x-icon\r\n"+
+				"Content-Length: %d\r\n"+
+				"Connection: close\r\n\r\n",
+			len(data),
+		)
+
+		conn.Write([]byte(resp))
+		conn.Write(data)
 		return
 	}
 
-	resp := fmt.Sprintf(
-		"HTTP/1.1 200 OK\r\n"+
-			"Content-Type: image/x-icon\r\n"+
-			"Content-Length: %d\r\n"+
-			"Connection: close\r\n\r\n",
-		len(data),
-	)
-
-	conn.Write([]byte(resp))
-	conn.Write(data)
-	return
-}
-
-  // GET /create -> mostrar formulario
-  if path == "/create" && method == "GET" {
-    body := `<!doctype html>
+	// GET /create -> mostrar formulario
+	if path == "/create" && method == "GET" {
+		body := `<!doctype html>
   <html>
   <head>
     <meta charset="utf-8">
@@ -132,155 +134,207 @@ func handleConn(conn net.Conn, db *sql.DB) {
   </body>
   </html>`
 
-    writeHTTP(conn, "200 OK", body)
-    return
-  }
+		writeHTTP(conn, "200 OK", body)
+		return
+	}
 
-  if strings.HasPrefix(path, "/decrement") && method == "POST" {
+	if strings.HasPrefix(path, "/decrement") && method == "POST" {
 
-	parts := strings.SplitN(path, "?", 2)
+		parts := strings.SplitN(path, "?", 2)
 
-	if len(parts) > 1 {
-		params, _ := url.ParseQuery(parts[1])
-		id := params.Get("id")
+		if len(parts) > 1 {
+			params, _ := url.ParseQuery(parts[1])
+			id := params.Get("id")
 
-		_, err := db.Exec(
-			`UPDATE series
+			_, err := db.Exec(
+				`UPDATE series
 			 SET current_episode = current_episode - 1
 			 WHERE id = ? AND current_episode > 1`,
-			id,
+				id,
+			)
+
+			if err != nil {
+				writeHTTP(conn, "500 Internal Server Error", "error")
+				return
+			}
+
+			resp := "HTTP/1.1 200 OK\r\n" +
+				"Content-Type: text/plain\r\n" +
+				"Content-Length: 2\r\n" +
+				"Connection: close\r\n\r\nok"
+
+			conn.Write([]byte(resp))
+			return
+		}
+	}
+
+	// POST /create -> recibir formulario
+	if path == "/create" && method == "POST" {
+
+		var contentLength int
+
+		// Leer headers hasta línea vacía
+		for {
+			hLine, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+
+			hLine = strings.TrimRight(hLine, "\r\n")
+
+			// Línea vacía = fin de headers
+			if hLine == "" {
+				break
+			}
+
+			// Buscar Content-Length
+			if strings.HasPrefix(hLine, "Content-Length:") {
+				lengthStr := strings.TrimSpace(strings.TrimPrefix(hLine, "Content-Length:"))
+				contentLength, _ = strconv.Atoi(lengthStr)
+			}
+		}
+
+		// Leer exactamente Content-Length bytes
+		bodyBytes := make([]byte, contentLength)
+		_, err := io.ReadFull(reader, bodyBytes)
+		if err != nil {
+			return
+		}
+
+		body := string(bodyBytes)
+
+		// Parsear application/x-www-form-urlencoded
+		values, err := url.ParseQuery(body)
+		if err != nil {
+			log.Println("Error parseando form:", err)
+		}
+
+		name := values.Get("series_name")
+		currentEp := values.Get("current_episode")
+		totalEps := values.Get("total_episodes")
+
+		// Convertir a enteros
+		currentInt, err1 := strconv.Atoi(currentEp)
+		totalInt, err2 := strconv.Atoi(totalEps)
+
+		if err1 != nil || err2 != nil {
+			log.Println("Error convirtiendo a int")
+			writeHTTP(conn, "400 Bad Request", "<h1>Datos inválidos</h1>")
+			return
+		}
+
+		// INSERT en la base
+		_, err = db.Exec(
+			"INSERT INTO series (name, current_episode, total_episodes) VALUES (?, ?, ?)",
+			name, currentInt, totalInt,
 		)
 
 		if err != nil {
-			writeHTTP(conn, "500 Internal Server Error", "error")
+			log.Println("Error insertando en DB:", err)
+			writeHTTP(conn, "500 Internal Server Error", "<h1>Error guardando en base</h1>")
 			return
 		}
 
-		resp := "HTTP/1.1 200 OK\r\n" +
-			"Content-Type: text/plain\r\n" +
-			"Content-Length: 2\r\n" +
-			"Connection: close\r\n\r\nok"
+		// Redirección 303 (POST/Redirect/GET)
+		resp := "HTTP/1.1 303 See Other\r\n" +
+			"Location: /\r\n" +
+			"Content-Length: 0\r\n" +
+			"Connection: close\r\n" +
+			"\r\n"
 
 		conn.Write([]byte(resp))
 		return
-	}
-}
 
-  // POST /create -> recibir formulario
-if path == "/create" && method == "POST" {
-
-	var contentLength int
-
-	// Leer headers hasta línea vacía
-	for {
-		hLine, err := reader.ReadString('\n')
-		if err != nil {
-			return
-		}
-
-		hLine = strings.TrimRight(hLine, "\r\n")
-
-		// Línea vacía = fin de headers
-		if hLine == "" {
-			break
-		}
-
-		// Buscar Content-Length
-		if strings.HasPrefix(hLine, "Content-Length:") {
-			lengthStr := strings.TrimSpace(strings.TrimPrefix(hLine, "Content-Length:"))
-			contentLength, _ = strconv.Atoi(lengthStr)
-		}
-	}
-
-	// Leer exactamente Content-Length bytes
-	bodyBytes := make([]byte, contentLength)
-	_, err := io.ReadFull(reader, bodyBytes)
-	if err != nil {
+		writeHTTP(conn, "200 OK", resp)
 		return
 	}
 
-	body := string(bodyBytes)
+	// POST /update?id=3
+	if strings.HasPrefix(path, "/update") && method == "POST" {
 
-	// Parsear application/x-www-form-urlencoded
-	values, err := url.ParseQuery(body)
-	if err != nil {
-		log.Println("Error parseando form:", err)
-	}
+		parts := strings.SplitN(path, "?", 2)
+		route := parts[0]
 
-	name := values.Get("series_name")
-	currentEp := values.Get("current_episode")
-	totalEps := values.Get("total_episodes")
+		if route == "/update" && len(parts) > 1 {
 
-	// Convertir a enteros
-  currentInt, err1 := strconv.Atoi(currentEp)
-  totalInt, err2 := strconv.Atoi(totalEps)
+			params, _ := url.ParseQuery(parts[1])
+			id := params.Get("id")
 
-  if err1 != nil || err2 != nil {
-    log.Println("Error convirtiendo a int")
-    writeHTTP(conn, "400 Bad Request", "<h1>Datos inválidos</h1>")
-    return
-  }
-
-  // INSERT en la base
-  _, err = db.Exec(
-    "INSERT INTO series (name, current_episode, total_episodes) VALUES (?, ?, ?)",
-    name, currentInt, totalInt,
-  )
-
-  if err != nil {
-    log.Println("Error insertando en DB:", err)
-    writeHTTP(conn, "500 Internal Server Error", "<h1>Error guardando en base</h1>")
-    return
-  }
-
-  // Redirección 303 (POST/Redirect/GET)
-  resp := "HTTP/1.1 303 See Other\r\n" +
-    "Location: /\r\n" +
-    "Content-Length: 0\r\n" +
-    "Connection: close\r\n" +
-    "\r\n"
-
-  conn.Write([]byte(resp))
-  return
-
-    writeHTTP(conn, "200 OK", resp)
-    return
-  }
-
-  // POST /update?id=3
-  if strings.HasPrefix(path, "/update") && method == "POST" {
-
-    parts := strings.SplitN(path, "?", 2)
-    route := parts[0]
-
-    if route == "/update" && len(parts) > 1 {
-
-      params, _ := url.ParseQuery(parts[1])
-      id := params.Get("id")
-
-      _, err := db.Exec(
-        `UPDATE series
+			_, err := db.Exec(
+				`UPDATE series
         SET current_episode = current_episode + 1
         WHERE id = ? AND current_episode < total_episodes`,
-        id,
-      )
+				id,
+			)
 
-      if err != nil {
-        writeHTTP(conn, "500 Internal Server Error", "error")
-        return
-      }
+			if err != nil {
+				writeHTTP(conn, "500 Internal Server Error", "error")
+				return
+			}
 
-      resp := "HTTP/1.1 200 OK\r\n" +
-        "Content-Type: text/plain\r\n" +
-        "Content-Length: 2\r\n" +
-        "Connection: close\r\n" +
-        "\r\n" +
-        "ok"
+			resp := "HTTP/1.1 200 OK\r\n" +
+				"Content-Type: text/plain\r\n" +
+				"Content-Length: 2\r\n" +
+				"Connection: close\r\n" +
+				"\r\n" +
+				"ok"
 
-      conn.Write([]byte(resp))
-      return
-    }
-  }
+			conn.Write([]byte(resp))
+			return
+		}
+	}
+
+	if strings.HasPrefix(path, "/rate") && method == "POST" {
+
+		parts := strings.SplitN(path, "?", 2)
+		if len(parts) > 1 {
+
+			params, _ := url.ParseQuery(parts[1])
+			id := params.Get("id")
+
+			var contentLength int
+
+			for {
+				hLine, err := reader.ReadString('\n')
+				if err != nil {
+					return
+				}
+				hLine = strings.TrimRight(hLine, "\r\n")
+				if hLine == "" {
+					break
+				}
+				if strings.HasPrefix(hLine, "Content-Length:") {
+					lengthStr := strings.TrimSpace(strings.TrimPrefix(hLine, "Content-Length:"))
+					contentLength, _ = strconv.Atoi(lengthStr)
+				}
+			}
+
+			bodyBytes := make([]byte, contentLength)
+			_, err := io.ReadFull(reader, bodyBytes)
+			if err != nil {
+				return
+			}
+
+			values, _ := url.ParseQuery(string(bodyBytes))
+			score := values.Get("score")
+
+			_, err = db.Exec(`
+        INSERT INTO ratings (serie_id, score)
+        VALUES (?, ?)
+        ON CONFLICT(serie_id)
+        DO UPDATE SET score = excluded.score;
+      `, id, score)
+
+			if err != nil {
+				writeHTTP(conn, "500 Internal Server Error", "error")
+				return
+			}
+
+			conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length:2\r\n\r\nok"))
+			return
+		}
+	}
+
 	// Solo atendemos "/" con la tabla. Cualquier otro path, mostramos un mensaje simple.
 	if path == "/" {
 		htmlBody, status := renderSeriesPage(db)
@@ -303,7 +357,11 @@ if path == "/create" && method == "POST" {
 }
 
 func renderSeriesPage(db *sql.DB) (string, string) {
-	rows, err := db.Query(`SELECT id, name, current_episode, total_episodes FROM series ORDER BY id`)
+	rows, err := db.Query(`SELECT s.id, s.name, s.current_episode, s.total_episodes,
+                        COALESCE(r.score, 0)
+                        FROM series s
+                        LEFT JOIN ratings r ON s.id = r.serie_id
+                        ORDER BY s.id`)
 	if err != nil {
 		body := fmt.Sprintf(`<!doctype html>
 <html><head><meta charset="utf-8"><title>Error</title></head>
@@ -316,7 +374,7 @@ func renderSeriesPage(db *sql.DB) (string, string) {
 	var series []Serie
 	for rows.Next() {
 		var s Serie
-		if err := rows.Scan(&s.ID, &s.Name, &s.Current, &s.TotalEpisodes); err != nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.Current, &s.TotalEpisodes, &s.Rating); err != nil {
 			body := fmt.Sprintf(`<!doctype html>
 <html><head><meta charset="utf-8"><title>Error</title></head>
 <body><h1>Error leyendo filas</h1><pre>%s</pre></body></html>`,
@@ -337,27 +395,79 @@ func renderSeriesPage(db *sql.DB) (string, string) {
 	var tableRows strings.Builder
 	for _, s := range series {
 		name := html.EscapeString(s.Name)
-    statusText := ""
-    if s.Current >= s.TotalEpisodes {
-      statusText = `<span style="color:green;font-weight:bold;">✔ COMPLETA</span>`
-    }
+		statusText := ""
+		if s.Current >= s.TotalEpisodes {
+			statusText = `<span style="color:green;font-weight:bold;">✔ COMPLETA</span>`
+		}
+		color1 := "#ccc"
+		if s.Rating >= 1 {
+			color1 = "gold"
+		}
+
+		color2 := "#ccc"
+		if s.Rating >= 2 {
+			color2 = "gold"
+		}
+
+		color3 := "#ccc"
+		if s.Rating >= 3 {
+			color3 = "gold"
+		}
+
+		color4 := "#ccc"
+		if s.Rating >= 4 {
+			color4 = "gold"
+		}
+
+		color5 := "#ccc"
+		if s.Rating >= 5 {
+			color5 = "gold"
+		}
+
 		tableRows.WriteString(fmt.Sprintf(
-      `<tr class="row" data-name="%s" data-current="%d" data-total="%d">
-        <td>%d</td>
-        <td class="name">%s %s</td>
-        <td>%d</td>
-        <td>%d</td>
-        <td class="progressCell"></td>
-        <td>
-          <button onclick="nextEpisode(%d)">+1</button>
-          <button onclick="prevEpisode(%d)">-1</button>
-        </td>
-        
-      </tr>`,
-      strings.ToLower(name), s.Current, s.TotalEpisodes,
-      s.ID, name, statusText, s.Current, s.TotalEpisodes,
-      s.ID, s.ID,
-      ))
+			`<tr class="row" data-name="%s" data-current="%d" data-total="%d">
+          <td>%d</td>
+          <td class="name">%s %s</td>
+          <td>%d</td>
+          <td>%d</td>
+          <td class="progressCell"></td>
+
+          <td>
+            <span onclick="rate(%d,1)" style="cursor:pointer;color:%s;">★</span>
+            <span onclick="rate(%d,2)" style="cursor:pointer;color:%s;">★</span>
+            <span onclick="rate(%d,3)" style="cursor:pointer;color:%s;">★</span>
+            <span onclick="rate(%d,4)" style="cursor:pointer;color:%s;">★</span>
+            <span onclick="rate(%d,5)" style="cursor:pointer;color:%s;">★</span>
+          </td>
+
+          <td>
+            <button onclick="nextEpisode(%d)">+1</button>
+            <button onclick="prevEpisode(%d)">-1</button>
+          </td>
+        </tr>`,
+
+			// ====== PARÁMETROS EXACTOS EN ORDEN ======
+
+			strings.ToLower(name), // %s
+			s.Current,             // %d
+			s.TotalEpisodes,       // %d
+
+			s.ID,       // %d
+			name,       // %s
+			statusText, // %s
+
+			s.Current,       // %d
+			s.TotalEpisodes, // %d
+
+			s.ID, color1, // rate 1
+			s.ID, color2, // rate 2
+			s.ID, color3, // rate 3
+			s.ID, color4, // rate 4
+			s.ID, color5, // rate 5
+
+			s.ID, // nextEpisode
+			s.ID, // prevEpisode
+		))
 	}
 
 	body := fmt.Sprintf(`<!doctype html>
@@ -408,7 +518,8 @@ func renderSeriesPage(db *sql.DB) (string, string) {
         <th data-col="2">Current <span class="arrow" id="a2"></span></th>
         <th data-col="3">Total <span class="arrow" id="a3"></span></th>
         <th data-col="4">Progress <span class="arrow" id="a4"></span></th>
-        <th>Acción</th>
+        <th>Rating</th>
+        <th>Episodios vistos</th>
       </tr>
     </thead>
     <tbody>
@@ -548,6 +659,20 @@ async function prevEpisode(id) {
     const url = "/decrement?id=" + id;
 
     const response = await fetch(url, { method: "POST" });
+
+    if (response.ok) {
+        location.reload();
+    }
+}
+
+async function rate(id, score) {
+    const response = await fetch("/rate?id=" + id, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: "score=" + score
+    });
 
     if (response.ok) {
         location.reload();
