@@ -10,6 +10,9 @@ import (
 	"strings"
 
 	_ "modernc.org/sqlite"
+  "strconv"
+	"net/url"
+	"io"
 )
 
 type Serie struct {
@@ -61,10 +64,138 @@ func handleConn(conn net.Conn, db *sql.DB) {
 	line = strings.TrimRight(line, "\r\n")
 	parts := strings.Fields(line)
 
-	path := "/"
-	if len(parts) >= 2 {
-		path = parts[1]
+  method := ""
+  path := "/"
+
+  if len(parts) >= 2 {
+    method = parts[0]
+    path = parts[1]
+  }
+
+  // GET /create -> mostrar formulario
+  if path == "/create" && method == "GET" {
+    body := `<!doctype html>
+  <html>
+  <head>
+    <meta charset="utf-8">
+    <title>Crear Serie</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 40px; }
+      form { max-width: 400px; display: flex; flex-direction: column; gap: 12px; }
+      input { padding: 8px; font-size: 14px; }
+      button { padding: 10px; font-size: 14px; cursor: pointer; }
+      a { display:inline-block; margin-top:15px; }
+      label {
+            font-weight: bold;
+            margin-top: 5px;
+            }
+    </style>
+  </head>
+  <body>
+    <h1>Agregar nueva serie</h1>
+
+    <form method="POST" action="/create">
+  
+      <label for="series_name">Nombre de la serie</label>
+      <input type="text" id="series_name" name="series_name" required>
+
+      <label for="current_episode">Episodio actual</label>
+      <input type="number" id="current_episode" name="current_episode" min="1" value="1" required>
+
+      <label for="total_episodes">Total de episodios</label>
+      <input type="number" id="total_episodes" name="total_episodes" min="1" required>
+
+      <button type="submit">Guardar</button>
+    </form>
+
+    <a href="/">← Volver al listado</a>
+  </body>
+  </html>`
+
+    writeHTTP(conn, "200 OK", body)
+    return
+  }
+
+  // POST /create -> recibir formulario
+if path == "/create" && method == "POST" {
+
+	var contentLength int
+
+	// Leer headers hasta línea vacía
+	for {
+		hLine, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+
+		hLine = strings.TrimRight(hLine, "\r\n")
+
+		// Línea vacía = fin de headers
+		if hLine == "" {
+			break
+		}
+
+		// Buscar Content-Length
+		if strings.HasPrefix(hLine, "Content-Length:") {
+			lengthStr := strings.TrimSpace(strings.TrimPrefix(hLine, "Content-Length:"))
+			contentLength, _ = strconv.Atoi(lengthStr)
+		}
 	}
+
+	// Leer exactamente Content-Length bytes
+	bodyBytes := make([]byte, contentLength)
+	_, err := io.ReadFull(reader, bodyBytes)
+	if err != nil {
+		return
+	}
+
+	body := string(bodyBytes)
+
+	// Parsear application/x-www-form-urlencoded
+	values, err := url.ParseQuery(body)
+	if err != nil {
+		log.Println("Error parseando form:", err)
+	}
+
+	name := values.Get("series_name")
+	currentEp := values.Get("current_episode")
+	totalEps := values.Get("total_episodes")
+
+	// Convertir a enteros
+currentInt, err1 := strconv.Atoi(currentEp)
+totalInt, err2 := strconv.Atoi(totalEps)
+
+if err1 != nil || err2 != nil {
+	log.Println("Error convirtiendo a int")
+	writeHTTP(conn, "400 Bad Request", "<h1>Datos inválidos</h1>")
+	return
+}
+
+// INSERT en la base
+_, err = db.Exec(
+	"INSERT INTO series (name, current_episode, total_episodes) VALUES (?, ?, ?)",
+	name, currentInt, totalInt,
+)
+
+if err != nil {
+	log.Println("Error insertando en DB:", err)
+	writeHTTP(conn, "500 Internal Server Error", "<h1>Error guardando en base</h1>")
+	return
+}
+
+// Redirección 303 (POST/Redirect/GET)
+resp := "HTTP/1.1 303 See Other\r\n" +
+	"Location: /\r\n" +
+	"Content-Length: 0\r\n" +
+	"Connection: close\r\n" +
+	"\r\n"
+
+conn.Write([]byte(resp))
+return
+
+	writeHTTP(conn, "200 OK", resp)
+	return
+}
 
 	// Solo atendemos "/" con la tabla. Cualquier otro path, mostramos un mensaje simple.
 	if path == "/" {
@@ -167,6 +298,7 @@ func renderSeriesPage(db *sql.DB) (string, string) {
 </head>
 <body>
   <h1>Tracker de Series</h1>
+  <p><a href="/create">+ Agregar nueva serie</a></p>
 
   <div class="topbar">
     <input id="search" type="text" placeholder="Buscar serie... (filtra en vivo)">
