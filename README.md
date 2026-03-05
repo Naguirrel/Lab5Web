@@ -1,108 +1,83 @@
 Lab 5 – Tracker de Series
 
 Descripción
-Aplicación web desarrollada en Go utilizando sockets TCP y SQLite. Permite llevar el control de series vistas, episodios actuales y progreso total.
+Aplicación web desarrollada en Go utilizando sockets TCP y SQLite. Permite llevar el control de series vistas, episodios actuales, progreso total y sistema de calificación por estrellas.
 
-El servidor implementa manejo manual de HTTP (sin frameworks), incluyendo parsing de requests, manejo de métodos GET/POST y generación dinámica de HTML.
+El servidor implementa manejo manual de HTTP (sin frameworks), incluyendo parsing manual de requests, manejo de métodos GET/POST y generación dinámica de HTML.
+
 
 Funcionalidades Base
 
-Manejo correcto de métodos GET y POST
+* Manejo correcto de métodos GET y POST
+* Parseo manual de application/x-www-form-urlencoded
+* Inserción en base de datos SQLite
+* Implementación del patrón POST / Redirect / GET (303 See Other)
+* Tabla generada dinámicamente desde la base de datos
+* Manejo de errores en consultas e inserciones
+* Uso de defer rows.Close() y defer db.Close()
 
-Parseo manual de application/x-www-form-urlencoded
-
-Inserción en base de datos SQLite
-
-Implementación del patrón POST / Redirect / GET (303 See Other)
-
-Tabla generada dinámicamente desde la base de datos
-
-Manejo de errores en consultas e inserciones
-
-Uso de defer rows.Close() y defer db.Close()
 
 Challenges Implementados
 
-Estilos y CSS
+Estilos y CSS — 10 pts
+Diseño personalizado con estilos propios, hover en filas, barra visual y toast dinámico.
 
-Diseño con estilos personalizados
+Barra de progreso — 15 pts
+Cálculo automático del porcentaje (episodios vistos / total) y animación visual en cada fila.
 
-Hover en filas
+Texto especial para serie completa — 10 pts
+Se muestra "✔ COMPLETA" cuando current_episode >= total_episodes.
 
-Toast dinámico
+Botón -1 — 10 pts
+Decrementa episodio usando fetch() con método POST en la ruta /decrement, validando que no baje de 1.
 
-Barra de progreso animada
+Favicon — 15 pts
+Implementado y servido manualmente desde el servidor en la ruta /favicon.ico.
 
-Barra de progreso
+Ordenamiento por columna — 20 pts
+Orden dinámico por ID, Nombre, Episodios actuales, Total de episodios y Progreso.
 
-Cálculo automático del porcentaje (episodios vistos / total)
+Sistema de rating con tabla propia — 40 pts
+Implementación de tabla independiente "ratings" en SQLite.
+Relación con tabla "series" mediante clave foránea.
+Uso de INSERT con ON CONFLICT DO UPDATE.
+Interfaz de 5 estrellas clickeables que guardan y actualizan el rating en base de datos.
 
-Animación visual en cada fila
 
-Texto especial para serie completa
+Total de Challenges Completados
 
-Se muestra "✔ COMPLETA" cuando current_episode >= total_episodes
+10 + 15 + 10 + 10 + 15 + 20 + 40 = 120 puntos acumulados
 
-Botón +1
-
-Incrementa episodio usando fetch() con método POST
-
-Ruta /update
-
-Validación para no exceder el total de episodios
-
-Botón -1
-
-Decrementa episodio usando fetch() con método POST
-
-Ruta /decrement
-
-Validación para no bajar de 1
-
-Favicon
-
-Implementado y servido manualmente desde el servidor
-
-Ruta /favicon.ico
-
-Ordenamiento por columna
-
-Orden dinámico por ID
-
-Orden por Nombre
-
-Orden por Episodios actuales
-
-Orden por Total de episodios
-
-Orden por Progreso
-
-Búsqueda en vivo (client-side)
-
-Filtrado dinámico por nombre de serie
 
 Rutas Implementadas
 
-GET / → Tabla principal
+GET /
+Tabla principal con listado dinámico de series.
 
-GET /create → Formulario para nueva serie
+GET /create
+Formulario para crear nueva serie.
 
-POST /create → Inserta serie en SQLite y redirige
+POST /create
+Inserta nueva serie en SQLite y redirige con 303.
 
-POST /update?id=X → Incrementa episodio
+POST /update?id=X
+Incrementa episodio actual con validación.
 
-POST /decrement?id=X → Decrementa episodio
+POST /decrement?id=X
+Decrementa episodio actual con validación.
 
-GET /favicon.ico → Sirve favicon
+POST /rate?id=X
+Guarda o actualiza el rating de la serie.
+
+GET /favicon.ico
+Sirve el favicon manualmente.
+
 
 Tecnologías Utilizadas
 
 Go (net, database/sql, bufio)
-
 SQLite (modernc.org/sqlite)
-
 JavaScript (fetch API)
-
 HTML + CSS
 
 Cómo Ejecutar
@@ -110,7 +85,7 @@ Ejecutar: go run main.go
 Abrir en navegador: http://localhost:8080
 
 ScreenShot:
-<img width="1919" height="1078" alt="image" src="https://github.com/user-attachments/assets/5af503ea-1dd5-4d6b-b05e-aeb87092ba37" />
+<img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/f0a43660-f0a2-46b4-9595-dc3731141ccd" />
 
 
 Notas
